@@ -13,6 +13,7 @@ import os
 import torch
 from random import randint
 from utils.loss_utils import l1_loss, ssim
+from utils.image_utils import psnr
 from gaussian_renderer import render, network_gui
 import sys
 from scene import Scene, GaussianModel
@@ -22,6 +23,9 @@ from tqdm import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
+
+import math
+import time
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_FOUND = True
@@ -29,6 +33,10 @@ except ImportError:
     TENSORBOARD_FOUND = False
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
+    total_train_time = 0
+    total_loss_time = 0
+    total_backward_time = 0
+    
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
     gaussians = GaussianModel(dataset.sh_degree) # gaussian model 초기화
@@ -67,6 +75,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 network_gui.conn = None
 
         iter_start.record()
+        start = time.time()
 
         gaussians.update_learning_rate(iteration) #xyz는 learning가 계속 변함
 
@@ -91,9 +100,26 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         # Loss //cuda로 original 이미지를 보내고 Loss계산.
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
-        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
-        loss.backward() # *** 모델에 대한 가중치의 모든 gradient를 계산하고, 그결과는 각 파라미터의 .grad 속성에 저장됩니다.
+        # print(float(torch.mean(psnr(image, gt_image))))
+        # print(psnr(image, gt_image).float())
+        # end = time.time()
+        # total_train_time += (end-start)
+        #print(f"train {end - start:.5f} sec")
+        
 
+        # start_loss = time.time()
+        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (2/float(torch.mean(psnr(image, gt_image)))) #
+        # (1.0- ssim(image, gt_image))
+        end_loss = time.time()
+        # total_loss_time += (end_loss - start_loss)
+        #print(f"loss {end - start:.5f} sec")
+        #opt.lambda_dssim * (2/float(torch.mean(psnr(image, gt_image))))
+        
+        # start_backward = time.time()
+        loss.backward() # *** 모델에 대한 가중치의 모든 gradient를 계산하고, 그결과는 각 파라미터의 .grad 속성에 저장됩니다.
+        # end_backward = time.time()
+        # total_backward_time += (end_backward - start_backward)
+        # print(f"backward {end - start:.5f} sec")
         iter_end.record()
         with torch.no_grad(): # autograd를 제거함, 보통 파라미터 업데이트가 필요없을 때 사용
             # Progress bar
@@ -131,7 +157,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
-
+    # print(f"train {total_train_time:.5f} sec")
+    # print(f"loss {total_loss_time:.5f} sec")
+    # print(f"backward {total_backward_time:.5f} sec")
 def prepare_output_and_logger(args):    
     if not args.model_path:
         if os.getenv('OAR_JOB_ID'):
