@@ -31,9 +31,9 @@ except ImportError:
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
-    gaussians = GaussianModel(dataset.sh_degree)
-    scene = Scene(dataset, gaussians)
-    gaussians.training_setup(opt)
+    gaussians = GaussianModel(dataset.sh_degree) # gaussian model 초기화
+    scene = Scene(dataset, gaussians) #scene/__init__.py
+    gaussians.training_setup(opt) # parameter 설정
     if checkpoint:
         (model_params, first_iter) = torch.load(checkpoint)
         gaussians.restore(model_params, opt)
@@ -48,7 +48,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     ema_loss_for_log = 0.0
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
-    for iteration in range(first_iter, opt.iterations + 1):        
+    total_time = 0
+
+    for iteration in range(first_iter, opt.iterations + 1):     # each iteration   
         if network_gui.conn == None:
             network_gui.try_connect()
         while network_gui.conn != None:
@@ -66,7 +68,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         iter_start.record()
 
-        gaussians.update_learning_rate(iteration)
+        gaussians.update_learning_rate(iteration) #xyz는 learning가 계속 변함
 
         # Every 1000 its we increase the levels of SH up to a maximum degree
         if iteration % 1000 == 0:
@@ -82,19 +84,18 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             pipe.debug = True
 
         bg = torch.rand((3), device="cuda") if opt.random_background else background
-
+            #render하고 image... 뽑아낸다.
         render_pkg = render(viewpoint_cam, gaussians, pipe, bg)
         image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
-        # Loss
+        # Loss //cuda로 original 이미지를 보내고 Loss계산.
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
         loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
-        loss.backward()
+        loss.backward() # *** 모델에 대한 가중치의 모든 gradient를 계산하고, 그결과는 각 파라미터의 .grad 속성에 저장됩니다.
 
         iter_end.record()
-
-        with torch.no_grad():
+        with torch.no_grad(): # autograd를 제거함, 보통 파라미터 업데이트가 필요없을 때 사용
             # Progress bar
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
             if iteration % 10 == 0:
@@ -102,14 +103,14 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 progress_bar.update(10)
             if iteration == opt.iterations:
                 progress_bar.close()
-
+            total_time += iter_start.elapsed_time(iter_end)
             # Log and save
             training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background))
             if (iteration in saving_iterations):
                 print("\n[ITER {}] Saving Gaussians".format(iteration))
                 scene.save(iteration)
 
-            # Densification
+            # Densification ???
             if iteration < opt.densify_until_iter:
                 # Keep track of max radii in image-space for pruning
                 gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
@@ -122,11 +123,11 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                     gaussians.reset_opacity()
 
-            # Optimizer step
-            if iteration < opt.iterations:
-                gaussians.optimizer.step()
-                gaussians.optimizer.zero_grad(set_to_none = True)
-
+            # Optimizer step ***
+            if iteration < opt.iterations: # 아래 주석을 참고하면, gaussian_model.py에 update될 변수등을 지정할 수 있다.
+                gaussians.optimizer.step() # (important) gaussian_model.py L.163, self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
+                gaussians.optimizer.zero_grad(set_to_none = True) # gradient를 초기화 해서 이전 iteration에서의 gradient가 누적되지 않도록 한다.
+                                                                    # set_to_none = 모든 파라미터 .grad속성을 none으로 하여 메모리를 아낄 수 있다.
             if (iteration in checkpoint_iterations):
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
