@@ -22,6 +22,7 @@ from tqdm import tqdm
 from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
+# from perceptual_loss import PerceptualLoss
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_FOUND = True
@@ -35,6 +36,8 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     gaussians = GaussianModel(dataset.sh_degree)
     scene = Scene(dataset, gaussians)
     gaussians.training_setup(opt)
+
+    # percep_loss = PerceptualLoss().cuda()
 
     # resume from a previously saved state
     if checkpoint:
@@ -93,7 +96,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         # Loss
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
-        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - ssim(image, gt_image))
+        Lssim = ssim(image, gt_image)
+        # Lperc = percep_loss(image, gt_image)
+        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - Lssim)
+        # loss = 0.6 * Ll1 + 0.3 * (1.0 - Lssim) + 0.1 * Lperc
         loss.backward()
 
         iter_end.record()
@@ -126,6 +132,9 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                     gaussians.reset_opacity()
+            else:
+                if iteration % opt.mask_prune_iter == 0:
+                    gaussians.mask_prune() 
 
             # Optimizer step
             if iteration < opt.iterations:
