@@ -1,0 +1,1 @@
+sudo docker run -it -p 6006:6006 --gpus '"device=2"' -v ./:/workspace seongryong0726/gsplatting_env /bin/bash
