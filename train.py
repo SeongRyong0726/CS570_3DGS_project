@@ -23,6 +23,7 @@ from utils.image_utils import psnr
 from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
 # from perceptual_loss import PerceptualLoss
+# from utils.image_utils import psnr
 try:
     from torch.utils.tensorboard import SummaryWriter
     TENSORBOARD_FOUND = True
@@ -96,10 +97,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         # Loss
         gt_image = viewpoint_cam.original_image.cuda()
         Ll1 = l1_loss(image, gt_image)
-        Lssim = ssim(image, gt_image)
+        # Lssim = ssim(image, gt_image)
+        psnr_ls = psnr(image, gt_image) 
         # Lperc = percep_loss(image, gt_image)
-        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - Lssim)
-        # loss = 0.6 * Ll1 + 0.3 * (1.0 - Lssim) + 0.1 * Lperc
+        # loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - Lssim) + opt.lambda_mask*torch.mean((torch.sigmoid(gaussians._mask)))
+        loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1/psnr_ls) + opt.lambda_mask*torch.mean((torch.sigmoid(gaussians._mask)))
+        # loss = (1.0 - opt.lambda_dssim) * Ll1 + opt.lambda_dssim * (1.0 - Lssim)
         loss.backward()
 
         iter_end.record()
